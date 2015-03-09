@@ -51,7 +51,48 @@ public class BigQueueUnitTest {
 		
 		}
 	}
-	
+
+    @Test
+   	public void bigBatchedLoopTest() throws IOException {
+        bigQueue = new BigQueueImpl(testDir, "big_loop_test");
+        assertNotNull(bigQueue);
+
+        int batchsize = 500;
+        int loop = 5000000;
+        for (int i = 0; i < loop; i++) {
+            bigQueue.enqueue(("" + i).getBytes());
+            assertTrue(bigQueue.size() == i + 1L);
+            assertTrue(!bigQueue.isEmpty());
+            byte[] data = bigQueue.peek();
+            assertEquals("0", new String(data));
+        }
+
+   		assertTrue(bigQueue.size() == loop);
+   		assertTrue(!bigQueue.isEmpty());
+   		assertEquals("0", new String(bigQueue.peek()));
+
+   		bigQueue.close();
+
+   		// create a new instance on exiting queue
+   		bigQueue = new BigQueueImpl(testDir, "big_loop_test");
+   		assertTrue(bigQueue.size() == loop);
+   		assertTrue(!bigQueue.isEmpty());
+
+   		for(int i = 0; i < loop; i+=batchsize) {
+            int batchIdx = 0;
+            for (byte[] data : bigQueue.dequeue(batchsize)) {
+                assertEquals("" + (i + batchIdx++), new String(data));
+                assertTrue(bigQueue.size() == loop - i - batchsize);
+            }
+        }
+
+   		assertTrue(bigQueue.isEmpty());
+
+   		bigQueue.gc();
+
+   		bigQueue.close();
+   	}
+
 	@Test
 	public void bigLoopTest() throws IOException {
 		bigQueue = new BigQueueImpl(testDir, "big_loop_test");

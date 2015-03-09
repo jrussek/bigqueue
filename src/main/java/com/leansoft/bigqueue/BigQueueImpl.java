@@ -102,6 +102,17 @@ public class BigQueueImpl implements IBigQueue {
 
     @Override
     public byte[] dequeue() throws IOException {
+        byte[][] data = this.dequeue(1);
+        if(data!=null) {
+            return data[0];
+        } else {
+            return null;
+        }
+    }
+
+    @Override
+    public byte[][] dequeue(int n) throws IOException {
+        byte[][] buffer = new byte[n][];
         long queueFrontIndex = -1L;
         try {
             queueFrontWriteLock.lock();
@@ -109,12 +120,14 @@ public class BigQueueImpl implements IBigQueue {
                 return null;
             }
             queueFrontIndex = this.queueFrontIndex.get();
-            byte[] data = this.innerArray.get(queueFrontIndex);
+            for(int i=0; i<n; i++) {
+                buffer[i] = this.innerArray.get(queueFrontIndex+i);
+            }
             long nextQueueFrontIndex = queueFrontIndex;
-            if (nextQueueFrontIndex == Long.MAX_VALUE) {
-                nextQueueFrontIndex = 0L; // wrap
+            if (nextQueueFrontIndex >= Long.MAX_VALUE - n) {
+                nextQueueFrontIndex = n - (Long.MAX_VALUE - nextQueueFrontIndex); // wrap
             } else {
-                nextQueueFrontIndex++;
+                nextQueueFrontIndex+=n;
             }
             this.queueFrontIndex.set(nextQueueFrontIndex);
             // persist the queue front
@@ -122,11 +135,10 @@ public class BigQueueImpl implements IBigQueue {
             ByteBuffer queueFrontIndexBuffer = queueFrontIndexPage.getLocal(0);
             queueFrontIndexBuffer.putLong(nextQueueFrontIndex);
             queueFrontIndexPage.setDirty(true);
-            return data;
         } finally {
             queueFrontWriteLock.unlock();
         }
-
+        return buffer;
     }
 
     @Override
@@ -154,11 +166,24 @@ public class BigQueueImpl implements IBigQueue {
 
     @Override
     public byte[] peek() throws IOException {
+        byte[][] data = this.peek(1);
+        if(data != null) {
+            return data[0];
+        } else {
+            return null;
+        }
+    }
+
+    @Override
+    public byte[][] peek(int n) throws IOException {
         if (this.isEmpty()) {
             return null;
         }
-        byte[] data = this.innerArray.get(this.queueFrontIndex.get());
-        return data;
+        byte[][] buffer = new byte[n][];
+        for(int i=0; i<n; i++) {
+            buffer[i] = this.innerArray.get(this.queueFrontIndex.get()+i);
+        }
+        return buffer;
     }
 
     @Override

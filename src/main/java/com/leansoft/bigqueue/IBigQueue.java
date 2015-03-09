@@ -37,6 +37,11 @@ public interface IBigQueue extends Closeable {
 	public byte[] dequeue() throws IOException;
 
     /**
+     * Retrieves and removes n-amount of items from the front of the queue
+     */
+    public byte[][] dequeue(int n) throws IOException;
+
+    /**
      * Retrieves a Future which will complete if new Items where enqued.
      *
      * Use this method to retrieve a future where to register as Listener instead of repeatedly polling the queues state.
@@ -62,6 +67,12 @@ public interface IBigQueue extends Closeable {
 	 */
 	public byte[] peek()  throws IOException;
 
+
+    /**
+     * Retrieves n-amount of items from the front of a queue
+     */
+
+    public byte[][] peek(int n) throws IOException;
 
     /**
      * Retrieves the item at the front of a queue asynchronously.
