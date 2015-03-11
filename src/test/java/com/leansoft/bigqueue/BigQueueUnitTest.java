@@ -58,7 +58,7 @@ public class BigQueueUnitTest {
         assertNotNull(bigQueue);
 
         int batchsize = 500;
-        int loop = 5000000;
+        int loop = 1000000;
         for (int i = 0; i < loop; i++) {
             bigQueue.enqueue(("" + i).getBytes());
             assertTrue(bigQueue.size() == i + 1L);
@@ -367,40 +367,17 @@ public class BigQueueUnitTest {
         bigQueue = new BigQueueImpl(testDir, "testParallelAsyncDequeueAndPeekOperations", BigArrayImpl.MINIMUM_DATA_PAGE_SIZE);
 
         ListenableFuture<byte[]> dequeueFuture = bigQueue.dequeueAsync();
-        ListenableFuture<byte[]> peekFuture = bigQueue.peekAsync();
 
         bigQueue.enqueue("Test1".getBytes());
 
 
         assertTrue(dequeueFuture.isDone());
-        assertTrue(peekFuture.isDone());
 
         assertEquals("Test1", new String(dequeueFuture.get()));
-        assertEquals("Test1", new String(peekFuture.get()));
 
         assertEquals(0, bigQueue.size());
     }
 
-
-    @Test
-    public void testMultiplePeekAsyncOperations() throws Exception {
-        bigQueue = new BigQueueImpl(testDir, "testMultiplePeekAsyncOperations", BigArrayImpl.MINIMUM_DATA_PAGE_SIZE);
-        ListenableFuture<byte[]> peekFuture1 = bigQueue.peekAsync();
-
-        bigQueue.enqueue("Test1".getBytes());
-
-        ListenableFuture<byte[]> peekFuture2 = bigQueue.peekAsync();
-        ListenableFuture<byte[]> peekFuture3 = bigQueue.peekAsync();
-
-        assertTrue(peekFuture1.isDone());
-        assertTrue(peekFuture2.isDone());
-        assertTrue(peekFuture3.isDone());
-        assertEquals(1, bigQueue.size());
-
-        assertEquals("Test1", new String(peekFuture1.get()));
-        assertEquals("Test1", new String(peekFuture2.get()));
-        assertEquals("Test1", new String(peekFuture3.get()));
-    }
 
 
     @Test
@@ -456,7 +433,7 @@ public class BigQueueUnitTest {
         }).start();
 
         if (testFlowControl.tryAcquire(2, 10, TimeUnit.SECONDS)) {
-            verify(spyBigQueue, times(numberOfItems)).dequeue();
+            verify(spyBigQueue, times(numberOfItems)).dequeue(1);
         } else {
             fail("Something is wrong with the testFlowControl semaphore or timing");
         }

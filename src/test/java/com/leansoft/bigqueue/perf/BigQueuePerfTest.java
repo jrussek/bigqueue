@@ -25,6 +25,9 @@ public class BigQueuePerfTest {
 	static {
 		try {
 			bigQueue = new BigQueueImpl(testDir, "perf_test");
+            bigQueue.removeAll();
+            bigQueue.flush();
+            bigQueue.gc();
 		} catch (IOException e) {
 			fail("fail to init big queue");
 		}
@@ -37,6 +40,7 @@ public class BigQueuePerfTest {
 	private static int producerNum = 2;
 	private static int consumerNum = 2;
 	private static int messageLength = 1024;
+    private static int batchSize = 100;
 	private static TestType testType = TestType.BIG_QUEUE_TEST;
 	//////////////////////////////////////////////////////////////////
 	
@@ -119,15 +123,17 @@ public class BigQueuePerfTest {
 				
 				long start = System.currentTimeMillis();
 				while(true) {
-					byte[] item = null;
-					int index = consumingItemCount.getAndIncrement();
+					byte[][] item = null;
+					int index = consumingItemCount.getAndAdd(batchSize);
 					if (index >= totalItemCount) break;
 					if (testType == TestType.IN_MEMORY_QUEUE_TEST) {
-						item = memoryQueue.take();
+                        // for(int i=0; i<batchSize; i++) {
+                            memoryQueue.take();
+                        //}
 					} else {
-						item = bigQueue.dequeue();
+						item = bigQueue.dequeue(batchSize);
 						while(item == null) {
-							item = bigQueue.dequeue();
+							item = bigQueue.dequeue(batchSize);
 						}
 					}
 				}

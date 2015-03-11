@@ -2,10 +2,15 @@ package com.leansoft.bigqueue;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Queue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import com.google.common.util.concurrent.AsyncFunction;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.leansoft.bigqueue.page.IMappedPage;
@@ -50,8 +55,35 @@ public class BigQueueImpl implements IBigQueue {
 
     // lock for dequeueFuture access
     private final Object futureLock = new Object();
-    private SettableFuture<byte[]> dequeueFuture;
-    private SettableFuture<byte[]> peekFuture;
+
+    private int maximumOutstandingRequests = 10;
+
+    private static Queue<FutureRequest> futureQueue;
+
+    private volatile int batchSize = 0;
+
+    private class FutureRequest {
+        private int requestedBatchsize;
+        private SettableFuture<byte[][]> resultFuture;
+
+        public FutureRequest(int requestedBatchsize, SettableFuture<byte[][]> resultFuture) {
+            this.requestedBatchsize = requestedBatchsize;
+            this.resultFuture = resultFuture;
+        }
+
+        public FutureRequest(SettableFuture<byte[][]> resultFuture) {
+            this.requestedBatchsize = 1;
+            this.resultFuture = resultFuture;
+        }
+
+        public int getRequestedBatchsize() {
+            return requestedBatchsize;
+        }
+
+        public SettableFuture<byte[][]> getResultFuture() {
+            return resultFuture;
+        }
+    }
 
     /**
      * A big, fast and persistent queue implementation,
@@ -74,6 +106,9 @@ public class BigQueueImpl implements IBigQueue {
      * @throws IOException exception throws if there is any IO error during queue initialization
      */
     public BigQueueImpl(String queueDir, String queueName, int pageSize) throws IOException {
+        if(futureQueue == null) {
+            futureQueue = new LinkedBlockingDeque<FutureRequest>(maximumOutstandingRequests);
+        }
         innerArray = new BigArrayImpl(queueDir, queueName, pageSize);
 
         // the ttl does not matter here since queue front index page is always cached
@@ -95,18 +130,39 @@ public class BigQueueImpl implements IBigQueue {
     @Override
     public void enqueue(byte[] data) throws IOException {
         this.innerArray.append(data);
-
-        this.completeFutures();
+        synchronized (futureLock) {
+            if (this.batchSize > 0 && this.size() >= this.batchSize) {
+                FutureRequest request = this.futureQueue.poll();
+                while(request != null) {
+                    SettableFuture<byte[][]> future = request.getResultFuture();
+                    if(future.isDone()) {
+                        request = this.futureQueue.poll();
+                    } else {
+                        future.set(this.dequeue(this.batchSize));
+                        break;
+                    }
+                }
+                if (this.futureQueue.isEmpty()) {
+                    this.batchSize = 0;
+                } else {
+                    this.batchSize = this.futureQueue.peek().getRequestedBatchsize();
+                }
+            }
+        }
     }
 
 
     @Override
     public byte[] dequeue() throws IOException {
-        byte[][] data = this.dequeue(1);
-        if(data!=null) {
-            return data[0];
-        } else {
+        if(this.isEmpty()) {
             return null;
+        }
+        try {
+            return dequeueAsync().get();
+        } catch (InterruptedException e) {
+            throw new IOException(e.getMessage());
+        } catch (ExecutionException e) {
+            throw new IOException(e.getMessage());
         }
     }
 
@@ -120,7 +176,7 @@ public class BigQueueImpl implements IBigQueue {
                 return null;
             }
             queueFrontIndex = this.queueFrontIndex.get();
-            for(int i=0; i<n; i++) {
+            for(int i=0; i<n && queueFrontIndex+i < this.innerArray.getHeadIndex(); i++) {
                 buffer[i] = this.innerArray.get(queueFrontIndex+i);
             }
             long nextQueueFrontIndex = queueFrontIndex;
@@ -143,7 +199,40 @@ public class BigQueueImpl implements IBigQueue {
 
     @Override
     public ListenableFuture<byte[]> dequeueAsync() {
-        this.initializeDequeueFutureIfNecessary();
+        return Futures.transform(this.dequeueAsync(1), new AsyncFunction<byte[][], byte[]>() {
+            @Override
+            public ListenableFuture<byte[]> apply(byte[][] bytes) throws Exception {
+                if(bytes != null) {
+                    return Futures.immediateFuture(bytes[0]);
+                } else {
+                    return Futures.immediateFuture(null);
+                }
+            }
+        });
+    }
+
+    @Override
+    public ListenableFuture<byte[][]> dequeueAsync(int n) {
+        ListenableFuture<byte[][]> dequeueFuture;
+        synchronized (futureLock) {
+            if(this.isEmpty()) {
+                this.batchSize = n;
+                SettableFuture<byte[][]> settableFuture = SettableFuture.create();
+                boolean success = this.futureQueue.offer(new FutureRequest(n, settableFuture));
+                if(!success) {
+                    dequeueFuture = Futures.immediateFailedFuture(new Exception("maximum amount of outstanding requests reached"));
+                } else {
+                    dequeueFuture = settableFuture;
+                }
+            } else {
+                try {
+                    dequeueFuture = Futures.immediateFuture(this.dequeue(n));
+                } catch (IOException e) {
+                    dequeueFuture = Futures.immediateFailedFuture(e);
+                }
+
+            }
+        }
         return dequeueFuture;
     }
 
@@ -180,16 +269,10 @@ public class BigQueueImpl implements IBigQueue {
             return null;
         }
         byte[][] buffer = new byte[n][];
-        for(int i=0; i<n; i++) {
+        for(int i=0; i<n && this.queueFrontIndex.get()+i < this.innerArray.getHeadIndex(); i++) {
             buffer[i] = this.innerArray.get(this.queueFrontIndex.get()+i);
         }
         return buffer;
-    }
-
-    @Override
-    public ListenableFuture<byte[]> peekAsync() {
-        this.initializePeekFutureIfNecessary();
-        return peekFuture;
     }
 
     /**
@@ -221,16 +304,14 @@ public class BigQueueImpl implements IBigQueue {
             this.queueFrontIndexPageFactory.releaseCachedPages();
         }
 
-
         synchronized (futureLock) {
             /* Cancel the future but don't interrupt running tasks
             because they might perform further work not refering to the queue
              */
-            if (peekFuture != null) {
-                peekFuture.cancel(false);
-            }
-            if (dequeueFuture != null) {
-                dequeueFuture.cancel(false);
+            for (FutureRequest futureRequest : futureQueue) {
+                if(futureRequest != null) {
+                    futureRequest.getResultFuture().cancel(false);
+                }
             }
         }
 
@@ -272,65 +353,6 @@ public class BigQueueImpl implements IBigQueue {
             return (qRear - qFront);
         } else {
             return Long.MAX_VALUE - qFront + 1 + qRear;
-        }
-    }
-
-
-    /**
-     * Completes the dequeue future
-     */
-    private void completeFutures() {
-        synchronized (futureLock) {
-            if (peekFuture != null && !peekFuture.isDone()) {
-                try {
-                    peekFuture.set(this.peek());
-                } catch (IOException e) {
-                    peekFuture.setException(e);
-                }
-            }
-            if (dequeueFuture != null && !dequeueFuture.isDone()) {
-                try {
-                    dequeueFuture.set(this.dequeue());
-                } catch (IOException e) {
-                    dequeueFuture.setException(e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Initializes the futures if it's null at the moment
-     */
-    private void initializeDequeueFutureIfNecessary() {
-        synchronized (futureLock) {
-            if (dequeueFuture == null || dequeueFuture.isDone()) {
-                dequeueFuture = SettableFuture.create();
-            }
-            if (!this.isEmpty()) {
-                try {
-                    dequeueFuture.set(this.dequeue());
-                } catch (IOException e) {
-                    dequeueFuture.setException(e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Initializes the futures if it's null at the moment
-     */
-    private void initializePeekFutureIfNecessary() {
-        synchronized (futureLock) {
-            if (peekFuture == null || peekFuture.isDone()) {
-                peekFuture = SettableFuture.create();
-            }
-            if (!this.isEmpty()) {
-                try {
-                    peekFuture.set(this.peek());
-                } catch (IOException e) {
-                    peekFuture.setException(e);
-                }
-            }
         }
     }
 

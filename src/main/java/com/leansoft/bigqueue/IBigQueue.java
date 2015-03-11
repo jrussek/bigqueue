@@ -51,6 +51,8 @@ public interface IBigQueue extends Closeable {
      */
     public ListenableFuture<byte[]> dequeueAsync();
 
+    public ListenableFuture<byte[][]> dequeueAsync(int n);
+
 	
 	/**
 	 * Removes all items of a queue, this will empty the queue and delete all back data files.
@@ -73,14 +75,6 @@ public interface IBigQueue extends Closeable {
      */
 
     public byte[][] peek(int n) throws IOException;
-
-    /**
-     * Retrieves the item at the front of a queue asynchronously.
-     * On complete the value set in this future is the result of the peek operation. Hence the item remains at the front of the list.
-     *
-     * @return a future containing the first item if available. You may register as listener at this future to be informed if a new item arrives.
-     */
-    public ListenableFuture<byte[]> peekAsync();
 
     /**
      * apply an implementation of a ItemIterator interface for each queue item
